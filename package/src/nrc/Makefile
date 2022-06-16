@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0
+ifeq ($(KERNELRELEASE),)
 KDIR ?= /lib/modules/$(shell uname -r)/build
 CHECKPATCH ?= $(KDIR)/scripts/checkpatch.pl
 
 include $(KDIR)/.config
+else
 
 M_SRC = nrc
 
@@ -40,6 +42,7 @@ endif
 
 #ccflags-y += -Wall -Werror -g
 ccflags-y += -Wall -Werror
+endif
 
 all: modules
 
