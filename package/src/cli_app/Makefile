@@ -15,7 +15,7 @@ LFLAGS += -L./ -l$(TARGET) -lm
 
 DEBUG = -g
 
-all: lib$(TARGET).a $(TARGET)
+all: $(TARGET)
 
 lib$(TARGET).a: $(LIB_SRCS)
 	@echo "$@"
