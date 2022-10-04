@@ -200,7 +200,7 @@
  */
 
 /* uncomment define below to set tx power via iw or iwconfig */
-/* #define CONFIG_SUPPORT_IW_IWCONFIG_TXPWR */
+#define CONFIG_SUPPORT_IW_IWCONFIG_TXPWR
 
 /* Use DT for spi device,
    spi_busnum_to_master fuction which is used to call spi_new_device
