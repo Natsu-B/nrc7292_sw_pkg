@@ -30,27 +30,6 @@
 static struct nrc *nrc_nw;
 
 
-#ifdef CONFIG_SUPPORT_NEW_NETLINK
-static int nrc_nl_pre_doit(const struct genl_ops *ops,
-			   struct sk_buff *skb, struct genl_info *info)
-#else
-static int nrc_nl_pre_doit(struct genl_ops *ops,
-			   struct sk_buff *skb, struct genl_info *info)
-#endif
-{
-	return 0;
-}
-
-#ifdef CONFIG_SUPPORT_NEW_NETLINK
-static void nrc_nl_post_doit(const struct genl_ops *ops,
-			     struct sk_buff *skb, struct genl_info *info)
-#else
-static void nrc_nl_post_doit(struct genl_ops *ops,
-			     struct sk_buff *skb, struct genl_info *info)
-#endif
-{
-}
-
 static bool nrc_set_stbc_rx(struct nrc *nw, u8 stream)
 {
 	struct ieee80211_supported_band *sband = NULL;
@@ -126,8 +105,6 @@ static struct genl_family nrc_nl_fam = {
 	.parallel_ops	= false,
 #endif
 	.netnsok	= true,
-	.pre_doit	= nrc_nl_pre_doit,
-	.post_doit	= nrc_nl_post_doit,
 #ifdef CONFIG_SUPPORT_AFTER_KERNEL_3_0_36
 	.mcgrps = nl_umac_mcast_grps,
 	.n_mcgrps = ARRAY_SIZE(nl_umac_mcast_grps),
