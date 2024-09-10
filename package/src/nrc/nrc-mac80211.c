@@ -3254,7 +3254,9 @@ static int nrc_pre_channel_switch(struct ieee80211_hw *hw,struct ieee80211_vif *
 	return 0;
 }
 
-static int nrc_post_channel_switch(struct ieee80211_hw *hw, struct ieee80211_vif *vif)
+static int nrc_post_channel_switch(struct ieee80211_hw *hw,
+				   struct ieee80211_vif *vif,
+				   struct ieee80211_bss_conf *link_conf)
 {
 	nrc_dbg(NRC_DBG_STATE, "[%s, %d] Channel switch complete\n", __func__, __LINE__);
 	return 0;
