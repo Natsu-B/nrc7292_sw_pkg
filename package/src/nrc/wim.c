@@ -164,7 +164,7 @@ int nrc_wim_change_sta(struct nrc *nw, struct ieee80211_vif *vif,
 				    tlv_len(sizeof(*p)));
 
 	p = nrc_wim_skb_add_tlv(skb, WIM_TLV_STA_PARAM, sizeof(*p), NULL);
-	memset(p, 0, sizeof(*p));
+	__memset(p, 0, sizeof(*p));
 
 	p->cmd = cmd;
 	p->flags = 0;
@@ -206,7 +206,7 @@ int nrc_wim_hw_scan(struct nrc *nw, struct ieee80211_vif *vif,
 
 	/* WIM_TL_SCAN_PARAM */
 	p = nrc_wim_skb_add_tlv(skb, WIM_TLV_SCAN_PARAM, sizeof(*p), NULL);
-	memset(p, 0, sizeof(*p));
+	__memset(p, 0, sizeof(*p));
 
 	if (WARN_ON(req->n_channels > WIM_MAX_SCAN_CHANNEL))
 		req->n_channels = WIM_MAX_SCAN_CHANNEL;
@@ -390,7 +390,7 @@ int nrc_wim_install_key(struct nrc *nw, enum set_key_cmd cmd,
 
 	p = nrc_wim_skb_add_tlv(skb, WIM_TLV_KEY_PARAM, sizeof(*p), NULL);
 
-	memset(p, 0, sizeof(*p));
+	__memset(p, 0, sizeof(*p));
 
 	if (sta) {
 		addr = sta->addr;
