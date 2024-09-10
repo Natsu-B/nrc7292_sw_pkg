@@ -68,10 +68,6 @@ static void write_file(char *filename, char *data, int len)
 #endif /* if KERNEL_VERSION(5,18,0) < NRC_TARGET_KERNEL_VERSION */
 }
 
-static void nrc_dump_init(void)
-{
-}
-
 static int cnt;
 void nrc_dump_store(char *src, int len)
 {
