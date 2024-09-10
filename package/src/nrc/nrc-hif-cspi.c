@@ -37,6 +37,7 @@
 #include "nrc-vendor.h"
 #include "nrc-mac80211.h"
 #include "nrc-stats.h"
+#include "nrc-hif-cspi.h"
 #include "wim.h"
 
 static bool once;
