@@ -3498,6 +3498,11 @@ static const struct ieee80211_ops nrc_mac80211_ops = {
 	.assign_vif_chanctx = nrc_mac_assign_vif_chanctx,
 	.unassign_vif_chanctx = nrc_mac_unassign_vif_chanctx,
 	.switch_vif_chanctx = nrc_mac_switch_vif_chanctx,
+#else
+	.add_chanctx = ieee80211_emulate_add_chanctx,
+	.remove_chanctx = ieee80211_emulate_remove_chanctx,
+	.change_chanctx = ieee80211_emulate_change_chanctx,
+	.switch_vif_chanctx = ieee80211_emulate_switch_vif_chanctx,
 #endif
 	.channel_switch_beacon = nrc_mac_channel_switch_beacon,
 	.pre_channel_switch = nrc_pre_channel_switch,
