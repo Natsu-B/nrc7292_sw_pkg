@@ -965,7 +965,7 @@ static int nrc_mac_start(struct ieee80211_hw *hw)
 	return 0;
 }
 
-void nrc_mac_stop(struct ieee80211_hw *hw)
+void nrc_mac_stop(struct ieee80211_hw *hw, bool suspend)
 {
 	struct nrc *nw = hw->priv;
 	int ret = 0;
