@@ -4880,7 +4880,7 @@ void nrc_unregister_hw(struct nrc *nw)
 	nrc_hif_cleanup(nw->hif); 
 
 	if (ieee80211_hw_check(nw->hw, SUPPORTS_DYNAMIC_PS)) {
-		del_timer(&nw->dynamic_ps_timer);
+		timer_delete(&nw->dynamic_ps_timer);
 	}
 }
 
