@@ -252,7 +252,7 @@ static void ap_max_idle_period_expire(unsigned long data)
 #else
 static void ap_max_idle_period_expire(struct timer_list *t)
 {
-	struct nrc_vif *i_vif = from_timer(i_vif, t, max_idle_timer);
+	struct nrc_vif *i_vif = timer_container_of(i_vif, t, max_idle_timer);
 #endif
 	struct nrc_sta *i_sta = NULL, *tmp = NULL;
 	unsigned long flags;
@@ -308,7 +308,7 @@ static void sta_max_idle_period_expire(unsigned long data)
 #else
 static void sta_max_idle_period_expire(struct timer_list *t)
 {
-	struct nrc_vif *i_vif = from_timer(i_vif, t, max_idle_timer);
+	struct nrc_vif *i_vif = timer_container_of(i_vif, t, max_idle_timer);
 #endif
 	struct ieee80211_hw *hw = i_vif->nw->hw;
 	struct nrc_sta *i_sta = NULL, *tmp = NULL, *tmp_sta = NULL;

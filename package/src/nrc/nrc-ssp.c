@@ -382,7 +382,7 @@ void set_timer(struct nrc_ssp_priv *priv)
 #else
 static void priodic_call(struct timer_list *t)
 {
-	struct nrc_hif_ssp *hif = from_timer(hif, t,
+	struct nrc_hif_ssp *hif = timer_container_of(hif, t,
 			exp_timer);
 	struct nrc_ssp_priv *priv = hif->ssp->priv;
 
