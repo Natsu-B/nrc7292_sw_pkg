@@ -325,3 +325,19 @@ The following shows an example of local mode sniffer running for US channel 159.
 cd nrc_pkg/script
 ./start.py 2 0 US 159 0
 ```
+
+# raspberry pi 5において 想定されるエラーと対処法
+
+`start.py`を起動して、
+```sh
+pi@raspberrypi:~/nrc7292_sw_pkg/package/evk/sw_pkg/nrc_pkg/script$ sudo insmod /home/pi/nrc_pkg/sw/driver/nrc.ko insmod: ERROR: could not insert module /home/pi/nrc_pkg/sw/driver/nrc.ko: Unknown symbol in module
+```
+上のエラーが出た際は以下を実行してモジュールをロードする。
+
+```sh
+sudo modprobe cfg80211
+sudo modprobe mac80211
+sudo modprobe rfkill
+sudo insmod /home/pi/nrc_pkg/sw/driver/nrc.ko
+```
+

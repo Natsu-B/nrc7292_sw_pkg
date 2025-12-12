@@ -1,0 +1,75 @@
+/*
+ * Device Tree overlay for Newracom (RPi5 / BCM2712 + RP1)
+ */
+/dts-v1/;
+/plugin/;
+
+ / {
+    compatible = "brcm,bcm2712";
+
+    /* 1) RP1 GPIO側に pinctrl グループを定義 */
+    fragment@0 {
+        target = <&gpio>;   /* Pi5では &gpio は rp1_gpio を指す構成が一般的 */
+        __overlay__ {
+            nrc_spi0_pins: nrc_spi0_pins {
+                function = "spi0";
+                pins = "gpio9", "gpio10", "gpio11";   /* MISO, MOSI, SCLK */
+                bias-disable;
+            };
+
+            nrc_spi0_cs_pins: nrc_spi0_cs_pins {
+                function = "spi0";
+                pins = "gpio8";                       /* CE0 */
+                bias-pull-up;
+            };
+
+            nrc_irq_pins: nrc_irq_pins {
+                function = "gpio";
+                pins = "gpio5";                       /* IRQ */
+                bias-pull-up;                         /* 必要なら */
+            };
+        };
+    };
+
+    /* 2) spi0 を有効化し、spidev@0 を殺す（CS0を使う想定） */
+    fragment@1 {
+        target = <&spi0>;
+        __overlay__ {
+            status = "okay";
+            pinctrl-names = "default";
+            pinctrl-0 = <&nrc_spi0_pins &nrc_spi0_cs_pins &nrc_irq_pins>;
+
+            /* 既存 spidev を無効化（必要に応じて spidev@1 も同様に） */
+            spidev@0 {
+                status = "disabled";
+            };
+        };
+    };
+
+    /* 3) Newracom デバイスを spi0 の子として追加 */
+    fragment@2 {
+        target = <&spi0>;
+        __overlay__ {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            nrc: nrc-cspi@0 {
+                compatible = "nrc80211";
+                reg = <0>;                          /* CS0 */
+                spi-max-frequency = <20000000>;
+
+                interrupt-parent = <&gpio>;
+                interrupts = <5 4>;                 /* GPIO5, IRQ_TYPE_LEVEL_HIGH(=4) */
+
+                /* IRQピン設定をこのノード側に寄せたいなら下記でもOK
+                 * pinctrl-names = "default";
+                 * pinctrl-0 = <&nrc_irq_pins>;
+                 */
+            };
+        };
+    };
+
+    __overrides__ {
+        max_speed_hz = <&nrc>, "spi-max-frequency:0";
+    };
+};
