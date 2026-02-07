@@ -5,6 +5,103 @@ import threading
 from mesh import *
 script_path = "/home/pi/nrc_pkg/script/"
 
+# Network stack integration:
+#   - legacy (default): this script manages wpa_supplicant/hostapd + dhcpcd + dnsmasq.
+#   - nm: this script only loads the NRC driver and uses NetworkManager for Wi-Fi + IP (STA).
+#
+# Enable by setting env var:
+#   NRC_NET_MGR=nm   (or "1"/"true"/"yes")
+USE_NETWORKMANAGER = os.environ.get("NRC_NET_MGR", "").lower() in (
+    "1", "true", "yes", "nm", "networkmanager"
+)
+NM_CONN_NAME = os.environ.get("NRC_NM_CONN", "nrc-halow")
+
+def _decode_output(b):
+    try:
+        return b.decode()
+    except Exception:
+        return b
+
+def _run_cmd(cmd_list):
+    try:
+        out = subprocess.check_output(cmd_list, stderr=subprocess.STDOUT)
+        return _decode_output(out)
+    except Exception:
+        return ""
+
+def _parse_wpa_conf(conf_path):
+    # Minimal wpa_supplicant.conf parser (only what we need for nmcli).
+    # Returns dict: {ssid, psk, key_mgmt}
+    d = {"ssid": None, "psk": None, "key_mgmt": None}
+    try:
+        f = open(conf_path, "r")
+        txt = f.read()
+        f.close()
+    except Exception:
+        return d
+    m = re.search(r'\bssid\s*=\s*"(.*?)"', txt)
+    if m:
+        d["ssid"] = m.group(1)
+    m = re.search(r'\bpsk\s*=\s*"(.*?)"', txt)
+    if m:
+        d["psk"] = m.group(1)
+    m = re.search(r'\bkey_mgmt\s*=\s*([A-Za-z0-9\-]+)', txt)
+    if m:
+        d["key_mgmt"] = m.group(1)
+    return d
+
+def _nmcli(args):
+    return _run_cmd(["nmcli"] + args)
+
+def _nm_ensure_connection(interface, conf_path):
+    # Create/replace an NM connection using ssid/keymgmt from the wpa_supplicant conf.
+    p = _parse_wpa_conf(conf_path)
+    ssid = p.get("ssid")
+    key_mgmt = (p.get("key_mgmt") or "").upper()
+    psk = p.get("psk")
+
+    if not ssid:
+        print("[!] NetworkManager mode: cannot parse SSID from %s" % conf_path)
+        return False
+
+    _nmcli(["dev", "set", interface, "managed", "yes"])
+    _nmcli(["connection", "delete", NM_CONN_NAME])
+
+    out = _nmcli(["connection", "add", "type", "wifi", "ifname", interface,
+                  "con-name", NM_CONN_NAME, "ssid", ssid])
+    if out == "":
+        print("[!] NetworkManager mode: failed to create NM connection")
+        return False
+
+    if key_mgmt in ("NONE", ""):
+        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.key-mgmt", "none"])
+    elif key_mgmt in ("WPA-PSK", "WPA_PSK"):
+        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.key-mgmt", "wpa-psk"])
+        if psk:
+            _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.psk", psk])
+    elif key_mgmt == "SAE":
+        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.key-mgmt", "sae"])
+        if psk:
+            _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.psk", psk])
+        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.pmf", "2"])
+    elif key_mgmt == "OWE":
+        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.key-mgmt", "owe"])
+        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.pmf", "2"])
+    else:
+        print("[!] NetworkManager mode: unsupported key_mgmt=%s, leaving security as default" % key_mgmt)
+
+    _nmcli(["connection", "up", NM_CONN_NAME, "ifname", interface])
+    return True
+
+def _nm_wait_for_ip(interface):
+    while True:
+        ip = _nmcli(["-g", "IP4.ADDRESS", "dev", "show", interface]).strip()
+        if ip:
+            print(ip)
+            return ip
+        print("Waiting for IP (NetworkManager)")
+        time.sleep(3)
+
 # Default Configuration (you can change value you want here)
 ##################################################################################
 # Raspbery Pi Conf.
@@ -164,7 +261,7 @@ def check(interface):
 
     ifconfig_lines = ifconfig_lines.split("\n")
     for line in ifconfig_lines:
-        if "inet 192.168" in line:
+        if ("inet " in line) and ("inet6" not in line):
             return line
     return ''
 
@@ -694,9 +791,12 @@ def run_common():
 
     print("[0] Clear")
     os.system("sudo hostapd_cli disable 2>/dev/null")
-    os.system("sudo wpa_cli disable wlan0 2>/dev/null ")
-    os.system("sudo wpa_cli disable wlan1 2>/dev/null")
-    os.system("sudo killall -9 wpa_supplicant 2>/dev/null")
+    if not USE_NETWORKMANAGER:
+        os.system("sudo wpa_cli disable wlan0 2>/dev/null ")
+        os.system("sudo wpa_cli disable wlan1 2>/dev/null")
+        os.system("sudo killall -9 wpa_supplicant 2>/dev/null")
+    else:
+        print("[*] NetworkManager mode: keep wpa_supplicant (NM owns it)")
     os.system("sudo killall -9 hostapd 2>/dev/null")
     os.system("sudo killall -9 wireshark 2>/dev/null")
     os.system("sudo rmmod nrc 2>/dev/null")
@@ -704,8 +804,9 @@ def run_common():
     os.system("sudo rm "+script_path+"conf/temp_hostapd_config.conf 2>/dev/null")
     os.system("sudo sh -c '[ -e /proc/sys/kernel/sysrq ] && echo 0 > /proc/sys/kernel/sysrq'")
     stopNAT()
-    stopDHCPCD()
-    stopDNSMASQ()
+    if not USE_NETWORKMANAGER:
+        stopDHCPCD()
+        stopDNSMASQ()
     time.sleep(1)
 
     print("[1] Copy and Set Module Parameters")
@@ -744,13 +845,17 @@ def run_common():
     if str(guard_int) != 'auto':
         os.system('/home/pi/nrc_pkg/script/cli_app set gi ' + guard_int)
 
-    print("[*] Start DHCPCD and DNSMASQ")
-    startDHCPCD()
-    startDNSMASQ()
+    if not USE_NETWORKMANAGER:
+        print("[*] Start DHCPCD and DNSMASQ")
+        startDHCPCD()
+        startDNSMASQ()
+    else:
+        print("[*] NetworkManager mode: skip dhcpcd/dnsmasq (NM owns IP)")
 
 def run_sta(interface):
     country = str(sys.argv[3])
-    os.system("sudo killall -9 wpa_supplicant")
+    if not USE_NETWORKMANAGER:
+        os.system("sudo killall -9 wpa_supplicant")
 
     if int(use_bridge_setup) > 0:
         bridge = '-b br0 '
@@ -772,6 +877,19 @@ def run_sta(interface):
     if int(power_save) > 0:
         print("[*] Set default power save timeout for " + interface)
         os.system("sudo iwconfig " + interface + " power timeout " + ps_timeout)
+
+    if USE_NETWORKMANAGER:
+        conf_map = {"OPEN":"sta_halow_open.conf","WPA2-PSK":"sta_halow_wpa2.conf","WPA3-OWE":"sta_halow_owe.conf","WPA3-SAE":"sta_halow_sae.conf","WPA-PBC":"sta_halow_pbc.conf"}
+        conf_file = conf_map.get(strSecurity())
+        if not conf_file:
+            sys.exit("[!] NetworkManager mode: unknown security mode")
+        conf_path = script_path + "conf/" + country + "/" + conf_file
+        if not _nm_ensure_connection(interface, conf_path):
+            sys.exit("[!] NetworkManager mode: failed to configure connection")
+        _nm_wait_for_ip(interface)
+        print("IP assigned. HaLow STA ready (NetworkManager)")
+        print("--------------------------------------------------------------------")
+        return
 
     print("[6] Start wpa_supplicant on " + interface)
     if strSecurity() == 'OPEN':
