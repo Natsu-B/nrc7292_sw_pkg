@@ -23,6 +23,8 @@
 #include <linux/interrupt.h>
 #include <net/mac80211.h>
 #include <linux/unaligned.h>
+#include <linux/slab.h>
+#include <linux/skbuff.h>
 #include <linux/smp.h>
 #ifdef CONFIG_SUPPORT_AFTER_KERNEL_3_0_36
 #include <linux/timekeeping.h>
@@ -1536,8 +1538,27 @@ static int spi_raw_write(struct nrc_hif_device *hdev,
 		const u8 *data, const u32 len)
 {
 	struct nrc_spi_priv *priv = hdev->priv;
+	u8 *tmp = NULL;
+	u8 *tx = (u8 *)data;
 
-	c_spi_write(priv->spi, (u8 *)data, (u32)len);
+	/*
+	 * Raspberry Pi 5 (RP1) SPI uses dw-axi-dmac; some kernels enforce 4-byte
+	 * alignment for DMA buffers. Ensure alignment here to avoid
+	 * "invalid buffer alignment" failures.
+	 */
+	if (!IS_ALIGNED((unsigned long)tx, 4)) {
+		tmp = kmalloc(len + 4, GFP_ATOMIC);
+		if (!tmp)
+			return -ENOMEM;
+		tx = PTR_ALIGN(tmp, 4);
+		memcpy(tx, data, len);
+	}
+
+	c_spi_write(priv->spi, tx, (u32)len);
+
+	if (tmp)
+		kfree(tmp);
+
 	return HIF_TX_COMPLETE;
 }
 
@@ -1597,21 +1618,53 @@ static int spi_xmit(struct nrc_hif_device *hdev, struct sk_buff *skb)
 	struct nrc_spi_priv *priv = hdev->priv;
 	//struct spi_device *spi = priv->spi;
 
-	int ret, nr_slot = DIV_ROUND_UP(skb->len, priv->slot[TX_SLOT].size);
+	int ret;
+	int nr_slot = DIV_ROUND_UP(skb->len, priv->slot[TX_SLOT].size);
+	int xfer_len = nr_slot * priv->slot[TX_SLOT].size;
 #ifdef CONFIG_TRX_BACKOFF
 	int backoff;
 #endif
 	struct hif_hdr *hif;
 	struct frame_hdr *fh;
-
-	hif = (void *)skb->data;
-	fh = (void *)(hif + 1);
+	u8 *tmp = NULL;
+	u8 *tx;
 
 	if (nw->drv_state <= NRC_DRV_CLOSING || nw->loopback)
 		return 0;
 
-	priv->slot[TX_SLOT].tail += nr_slot;
+	/*
+	 * The original code wrote (nr_slot * slot_size) bytes directly from
+	 * skb->data, even when skb->len was smaller. This may read past the
+	 * skb data area and also triggers DMA alignment checks on Raspberry Pi 5.
+	 *
+	 * Fix:
+	 *  1) pad skb to xfer_len (zero-fill)
+	 *  2) if skb->data isn't 4-byte aligned, use a 4-byte aligned bounce buffer
+	 */
+	if (unlikely(skb->len < xfer_len)) {
+		if (skb_padto(skb, xfer_len)) {
+			nrc_mac_dbg("spi_xmit: skb_padto(%d) failed\n",
+				xfer_len);
+			return -ENOMEM;
+		}
+	}
 
+	tx = skb->data;
+	if (unlikely(!IS_ALIGNED((unsigned long)tx, 4))) {
+		tmp = kmalloc(xfer_len + 4, GFP_ATOMIC);
+		if (!tmp) {
+			nrc_mac_dbg("spi_xmit: bounce alloc failed\n");
+			return -ENOMEM;
+		}
+		tx = PTR_ALIGN(tmp, 4);
+		memcpy(tx, skb->data, xfer_len);
+	}
+
+	hif = (void *)skb->data;
+	fh = (void *)(hif + 1);
+
+	/* Account slots only after we know we can transmit (no early returns). */
+	priv->slot[TX_SLOT].tail += nr_slot;
 	if ((hif->type == HIF_TYPE_FRAME)
 			&& ((hif->subtype == HIF_FRAME_SUB_DATA_BE)
 				|| (hif->subtype == HIF_FRAME_SUB_MGMT)))
@@ -1632,9 +1685,11 @@ static int spi_xmit(struct nrc_hif_device *hdev, struct sk_buff *skb)
 #endif
 
 	//c_spi_write_reg(priv->spi, C_SPI_WAKE_UP, 0x79);
-	/* Yes, I know we are accessing beyound skb->data + skb->len */
-	ret = c_spi_write(priv->spi, skb->data,
-			(nr_slot * priv->slot[TX_SLOT].size));
+	ret = c_spi_write(priv->spi, tx, xfer_len);
+
+	if (tmp)
+		kfree(tmp);
+
 #ifdef CONFIG_NRC_HIF_PRINT_FLOW_CONTROL
 	nrc_dbg(NRC_DBG_HIF,
 	"%s ac=%d skb=%p, slot=%d(%d/%d),fwpend:%d/%d, pending=%d",
@@ -1646,8 +1701,7 @@ static int spi_xmit(struct nrc_hif_device *hdev, struct sk_buff *skb)
 			skb_queue_len(&hdev->queue[0]));
 #endif
 
-	return (ret == nr_slot * priv->slot[TX_SLOT].size) ?
-		HIF_TX_COMPLETE : ret;
+	return (ret == xfer_len) ? HIF_TX_COMPLETE : ret;
 }
 
 static void spi_poll_status(struct work_struct *work)
