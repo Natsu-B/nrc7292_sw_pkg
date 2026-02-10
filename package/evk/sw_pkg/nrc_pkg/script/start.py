@@ -2,6 +2,7 @@
 
 import sys, os, time, subprocess, re
 import threading
+import shutil
 from mesh import *
 script_path = "/home/pi/nrc_pkg/script/"
 
@@ -22,12 +23,20 @@ def _decode_output(b):
     except Exception:
         return b
 
+def _cmd_exists(cmd):
+    return shutil.which(cmd) is not None
+
 def _run_cmd(cmd_list):
+    """
+    Run command and ALWAYS return (rc, combined_output).
+    Never swallow errors (nmcli failures were hidden before).
+    """
     try:
-        out = subprocess.check_output(cmd_list, stderr=subprocess.STDOUT)
-        return _decode_output(out)
-    except Exception:
-        return ""
+        p = subprocess.run(cmd_list, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        out = p.stdout if p.stdout is not None else ""
+        return p.returncode, out
+    except Exception as e:
+        return 127, str(e)
 
 def _parse_wpa_conf(conf_path):
     # Minimal wpa_supplicant.conf parser (only what we need for nmcli).
@@ -51,7 +60,14 @@ def _parse_wpa_conf(conf_path):
     return d
 
 def _nmcli(args):
-    return _run_cmd(["nmcli"] + args)
+    if not _cmd_exists("nmcli"):
+        return 127, "nmcli not found"
+    # Run nmcli as root to avoid polkit/interactive auth issues on headless systems.
+    if os.geteuid() == 0:
+        cmd = ["nmcli"] + args
+    else:
+        cmd = ["sudo", "-E", "nmcli"] + args
+    return _run_cmd(cmd)
 
 def _nm_ensure_connection(interface, conf_path):
     # Create/replace an NM connection using ssid/keymgmt from the wpa_supplicant conf.
@@ -64,38 +80,82 @@ def _nm_ensure_connection(interface, conf_path):
         print("[!] NetworkManager mode: cannot parse SSID from %s" % conf_path)
         return False
 
-    _nmcli(["dev", "set", interface, "managed", "yes"])
-    _nmcli(["connection", "delete", NM_CONN_NAME])
+    rc, out = _nmcli(["dev", "set", interface, "managed", "yes"])
+    if rc != 0:
+        print("[!] nmcli dev set managed yes failed:\n%s" % out)
+        return False
 
-    out = _nmcli(["connection", "add", "type", "wifi", "ifname", interface,
-                  "con-name", NM_CONN_NAME, "ssid", ssid])
-    if out == "":
-        print("[!] NetworkManager mode: failed to create NM connection")
+    # Delete old connection if exists (ignore error but show output for debugging)
+    rc, out = _nmcli(["connection", "delete", NM_CONN_NAME])
+    if rc != 0 and out.strip():
+        print("[*] nmcli connection delete (ignored):\n%s" % out)
+
+    rc, out = _nmcli(["connection", "add", "type", "wifi",
+                      "ifname", interface, "con-name", NM_CONN_NAME,
+                      "ssid", ssid])
+    if rc != 0:
+        print("[!] NetworkManager mode: failed to create NM connection:\n%s" % out)
         return False
 
     if key_mgmt in ("NONE", ""):
-        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.key-mgmt", "none"])
+        rc, out = _nmcli(["connection", "modify", NM_CONN_NAME,
+                          "802-11-wireless-security.key-mgmt", "none"])
+        if rc != 0:
+            print("[!] nmcli modify(open) failed:\n%s" % out)
+            return False
     elif key_mgmt in ("WPA-PSK", "WPA_PSK"):
-        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.key-mgmt", "wpa-psk"])
+        rc, out = _nmcli(["connection", "modify", NM_CONN_NAME,
+                          "802-11-wireless-security.key-mgmt", "wpa-psk"])
+        if rc != 0:
+            print("[!] nmcli modify(wpa-psk) failed:\n%s" % out)
+            return False
         if psk:
-            _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.psk", psk])
+            rc, out = _nmcli(["connection", "modify", NM_CONN_NAME,
+                              "802-11-wireless-security.psk", psk])
+            if rc != 0:
+                print("[!] nmcli set psk failed:\n%s" % out)
+                return False
     elif key_mgmt == "SAE":
-        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.key-mgmt", "sae"])
+        rc, out = _nmcli(["connection", "modify", NM_CONN_NAME,
+                          "802-11-wireless-security.key-mgmt", "sae"])
+        if rc != 0:
+            print("[!] nmcli modify(sae) failed:\n%s" % out)
+            return False
         if psk:
-            _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.psk", psk])
-        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.pmf", "2"])
+            rc, out = _nmcli(["connection", "modify", NM_CONN_NAME,
+                              "802-11-wireless-security.psk", psk])
+            if rc != 0:
+                print("[!] nmcli set psk failed:\n%s" % out)
+                return False
+        rc, out = _nmcli(["connection", "modify", NM_CONN_NAME,
+                          "802-11-wireless-security.pmf", "2"])
+        if rc != 0:
+            print("[!] nmcli set pmf failed:\n%s" % out)
+            return False
     elif key_mgmt == "OWE":
-        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.key-mgmt", "owe"])
-        _nmcli(["connection", "modify", NM_CONN_NAME, "wifi-sec.pmf", "2"])
+        rc, out = _nmcli(["connection", "modify", NM_CONN_NAME,
+                          "802-11-wireless-security.key-mgmt", "owe"])
+        if rc != 0:
+            print("[!] nmcli modify(owe) failed:\n%s" % out)
+            return False
+        rc, out = _nmcli(["connection", "modify", NM_CONN_NAME,
+                          "802-11-wireless-security.pmf", "2"])
+        if rc != 0:
+            print("[!] nmcli set pmf failed:\n%s" % out)
+            return False
     else:
         print("[!] NetworkManager mode: unsupported key_mgmt=%s, leaving security as default" % key_mgmt)
 
-    _nmcli(["connection", "up", NM_CONN_NAME, "ifname", interface])
+    rc, out = _nmcli(["connection", "up", NM_CONN_NAME, "ifname", interface])
+    if rc != 0:
+        print("[!] nmcli connection up failed:\n%s" % out)
+        return False
     return True
 
 def _nm_wait_for_ip(interface):
     while True:
-        ip = _nmcli(["-g", "IP4.ADDRESS", "dev", "show", interface]).strip()
+        rc, out = _nmcli(["-g", "IP4.ADDRESS", "dev", "show", interface])
+        ip = out.strip()
         if ip:
             print(ip)
             return ip
@@ -481,9 +541,15 @@ def argv_print():
 
 def copyConf():
     os.system("sudo /home/pi/nrc_pkg/sw/firmware/copy " + str(model) + " " + strBDName())
-    os.system("/home/pi/nrc_pkg/script/conf/etc/ip_config.sh " + strSTA() + " " +  str(relay_type) + " " + str(static_ip) + " " + str(batman))
+    if USE_NETWORKMANAGER and strSTA() == "STA":
+        print("[*] NetworkManager mode: skip ip_config.sh")
+    else:
+        os.system("/home/pi/nrc_pkg/script/conf/etc/ip_config.sh " + strSTA() + " " +  str(relay_type) + " " + str(static_ip) + " " + str(batman))
 
 def startNAT():
+    if not _cmd_exists("iptables"):
+        print("[*] iptables not found: skip NAT")
+        return
     os.system('sudo sh -c "echo 1 > /proc/sys/net/ipv4/ip_forward"')
     if strSTA() == 'AP':
         os.system("sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE")
@@ -502,6 +568,8 @@ def startNAT():
         print("fail to start NAT")
 
 def stopNAT():
+    if not _cmd_exists("iptables"):
+        return
     os.system('sudo sh -c "echo 0 > /proc/sys/net/ipv4/ip_forward"')
     os.system("sudo iptables -t nat --flush")
     os.system("sudo iptables --flush")
@@ -564,7 +632,7 @@ def self_config_check():
         return 'Fail'
     else:
         print(result)
-        best_channel = re.split('[:,\s,\t,\n]+', result)[-3]
+        best_channel = re.split(r'[:,\s,\t,\n]+', result)[-3]
         os.system("sudo cp " + conf_path+conf_file + " temp_self_config.conf")
         os.system("sudo mv temp_self_config.conf " +script_path +"conf/")
         os.system("sed -i '/channel=/d' " + script_path + "conf/temp_self_config.conf")
@@ -792,11 +860,17 @@ def run_common():
     print("[0] Clear")
     os.system("sudo hostapd_cli disable 2>/dev/null")
     if not USE_NETWORKMANAGER:
+        # Avoid NM fighting with legacy wpa_supplicant control
+        if _cmd_exists("nmcli"):
+            os.system("sudo nmcli dev set wlan0 managed no 2>/dev/null")
         os.system("sudo wpa_cli disable wlan0 2>/dev/null ")
         os.system("sudo wpa_cli disable wlan1 2>/dev/null")
         os.system("sudo killall -9 wpa_supplicant 2>/dev/null")
     else:
         print("[*] NetworkManager mode: keep wpa_supplicant (NM owns it)")
+        # Ensure NM manages wlan0
+        if _cmd_exists("nmcli"):
+            os.system("sudo nmcli dev set wlan0 managed yes 2>/dev/null")
     os.system("sudo killall -9 hostapd 2>/dev/null")
     os.system("sudo killall -9 wireshark 2>/dev/null")
     os.system("sudo rmmod nrc 2>/dev/null")
@@ -832,7 +906,7 @@ def run_common():
 
     ret = subprocess.call(["sudo", "ifconfig", "wlan0", "up"])
     if ret == 255:
-        os.system('sudo rmmod nrc.ko')
+        os.system('sudo rmmod nrc 2>/dev/null')
         sys.exit()
 
     print("[4] Set Maximum TX Power")
