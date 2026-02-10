@@ -3555,12 +3555,6 @@ int nrc_reg_notifier(struct wiphy *wiphy,
 #endif
 	}
 
-	// Force using US, because our card is actually a US one.
-	// The regulatory information from the kernel does not tell which
-	// kind of card we use.
-	nrc_cc[0] = 'U';
-	nrc_cc[1] = 'S';
-
 #if defined(CONFIG_SUPPORT_BD)
 	/**
 	 * Read board data and save buffer.
